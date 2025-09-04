@@ -1,3 +1,5 @@
+use std::ops::Sub;
+
 use rand::prelude::*;
 use rand_seeder::{ Seeder, SipRng };
 use bitvec::prelude::*;
@@ -75,7 +77,7 @@ impl Block {
             let nibble = bits_to_byte(chunk.iter().by_vals());
             let substituted = sbox[nibble as usize];
             for i in 0..SBOX_BITS {
-                chunk.set(i as usize, (substituted >> i & 1) != 0)
+                chunk.set(i, (substituted >> i & 1) != 0)
             }
         }
         self
@@ -97,6 +99,7 @@ impl Key {
             for (i, bit) in chunk.iter().by_vals().enumerate() {
                 subkey_data.set(i, bit);
             }
+            println!("subkey: {:?}", Subkey(subkey_data).to_byte());
             subkeys.push(Subkey(subkey_data));
         }
         subkeys
@@ -136,33 +139,49 @@ fn recover_key_combinations(pt1: Block, pt2: Block, sbox: Sbox) -> Vec<(Subkey, 
     let inv_sbox: Sbox = generate_inverse_sbox(sbox);
     pt2.sub_bytes(inv_sbox);
 
-    for k0_byte in 0..1<<BLOCK_SIZE {
+    for k0_byte in 0..=255 {
         let k0: Subkey = Subkey::from_byte(k0_byte);
         let pt = pt1.add_subkey(k0).sub_bytes(sbox);
         let k1 = Subkey::from_byte(pt.to_byte() ^ pt2.to_byte());
         key_combinations.push((k0, k1))
     };
-
     key_combinations
 }
 
-fn check_slid_pair(pt1: Block, pt2: Block, ct1: Block, ct2: Block, sbox: Sbox) -> bool {
-    let key_guesses = recover_key_combinations(pt1, pt2, sbox);
-    for (k0, k1) in key_guesses.iter() {
-        let ct = ct1.add_subkey(*k0)
-            .sub_bytes(sbox)
-            .add_subkey(*k1)
-            .sub_bytes(sbox);
-
-        if ct.to_byte() == ct2.to_byte() {
-            return true
-        }
-    }
-    false
+fn check_key_basic(pt: Block, ct: Block, k0: Subkey, k1: Subkey, sbox: Sbox) -> bool {
+    let subkeys: Vec<Subkey> = vec![k0, k1];
+    let mut cip = Cipher { sbox, subkeys };
+    cip.encrypt_block(pt).to_byte() != ct.to_byte()
 }
 
-fn find_slid_pairs(plaintexts: &Vec<Block>, ciphertexts: &Vec<Block>, sbox: Sbox) -> Vec<(u8, u8)> {
-    let mut slid_pairs = Vec::new();
+fn check_slid_pair(pt1: Block, pt2: Block, ct1: Block, ct2: Block, sbox: Sbox) -> Vec<(Subkey, Subkey)> {
+    let key_guesses = recover_key_combinations(pt1, pt2, sbox);
+    key_guesses.into_iter()
+        .filter(|(k0, k1)| {
+            let ct = ct1;
+            ct.add_subkey(*k0)
+                .sub_bytes(sbox)
+                .add_subkey(*k1)
+                .sub_bytes(sbox);
+
+            ct.to_byte() == ct2.to_byte()
+                && check_key_basic(pt1, ct1, *k0, *k1, sbox)
+        })
+        .collect()
+}
+
+fn check_key_expensive(k0: Subkey, k1: Subkey, plaintexts: &[Block], ciphertexts: &[Block], sbox: Sbox) -> bool {
+    let subkeys: Vec<Subkey> = vec![k0, k1];
+    let mut cip = Cipher { sbox, subkeys };
+    for (&pt, &ct) in plaintexts.iter().zip(ciphertexts).take(10) { 
+        if cip.encrypt_block(pt).to_byte() != ct.to_byte() {
+            return false
+        }
+    };
+    true
+}
+
+fn attack(plaintexts: &[Block], ciphertexts: &[Block], sbox: Sbox) {
     for i in 0..plaintexts.len() {
         let pt1 = plaintexts[i];
         let ct1 = ciphertexts[i];
@@ -170,13 +189,15 @@ fn find_slid_pairs(plaintexts: &Vec<Block>, ciphertexts: &Vec<Block>, sbox: Sbox
             let pt2 = plaintexts[j];
             let ct2 = ciphertexts[j];
             if i != j {
-                if check_slid_pair(pt1, pt2, ct1, ct2, sbox) {
-                    slid_pairs.push((i as u8, j as u8));
+                let recovered_keys = check_slid_pair(pt1, pt2, ct1, ct2, sbox);
+                for (k0, k1) in recovered_keys {
+                    if check_key_expensive(k0, k1, plaintexts, ciphertexts, sbox) {
+                        println!("{:?} {:?}", k0.to_byte(), k1.to_byte());
+                    }
                 }
             }
         }
     }
-    slid_pairs
 }
 
 fn main() {
@@ -194,18 +215,14 @@ fn main() {
     let mut plaintexts: Vec<Block> = Vec::new();
     let mut ciphertexts: Vec<Block> = Vec::new();
 
-    for _ in 0..30 {
+    for _ in 0..20 {
         let plaintext: Block = Block::from_byte(rng.next_u32() as u8);
         let ciphertext = cip.encrypt_block(plaintext);
         plaintexts.push(plaintext);
         ciphertexts.push(ciphertext);
     }
 
-    let slid_pairs = find_slid_pairs(&plaintexts, &ciphertexts, sbox);
-    for (pt1, pt2) in slid_pairs {
-        println!("{} {}", pt1, pt2);
-    }
-
+    attack(&plaintexts, &ciphertexts, sbox);
     println!("{:?}", plaintexts.iter().map(|block| block.to_byte()).collect::<Vec<u8>>());
     println!("{:?}", ciphertexts.iter().map(|block| block.to_byte()).collect::<Vec<u8>>());
 }
