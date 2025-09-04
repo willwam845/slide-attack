@@ -1,5 +1,3 @@
-use std::ops::Sub;
-
 use rand::prelude::*;
 use rand_seeder::{ Seeder, SipRng };
 use bitvec::prelude::*;
@@ -99,7 +97,6 @@ impl Key {
             for (i, bit) in chunk.iter().by_vals().enumerate() {
                 subkey_data.set(i, bit);
             }
-            println!("subkey: {:?}", Subkey(subkey_data).to_byte());
             subkeys.push(Subkey(subkey_data));
         }
         subkeys
@@ -137,7 +134,7 @@ fn generate_inverse_sbox(sbox: Sbox) -> Sbox {
 fn recover_key_combinations(pt1: Block, pt2: Block, sbox: Sbox) -> Vec<(Subkey, Subkey)> {
     let mut key_combinations = Vec::new();
     let inv_sbox: Sbox = generate_inverse_sbox(sbox);
-    pt2.sub_bytes(inv_sbox);
+    let pt2 = pt2.sub_bytes(inv_sbox);
 
     for k0_byte in 0..=255 {
         let k0: Subkey = Subkey::from_byte(k0_byte);
@@ -151,15 +148,15 @@ fn recover_key_combinations(pt1: Block, pt2: Block, sbox: Sbox) -> Vec<(Subkey, 
 fn check_key_basic(pt: Block, ct: Block, k0: Subkey, k1: Subkey, sbox: Sbox) -> bool {
     let subkeys: Vec<Subkey> = vec![k0, k1];
     let mut cip = Cipher { sbox, subkeys };
-    cip.encrypt_block(pt).to_byte() != ct.to_byte()
+    cip.encrypt_block(pt).to_byte() == ct.to_byte()
 }
 
 fn check_slid_pair(pt1: Block, pt2: Block, ct1: Block, ct2: Block, sbox: Sbox) -> Vec<(Subkey, Subkey)> {
     let key_guesses = recover_key_combinations(pt1, pt2, sbox);
     key_guesses.into_iter()
         .filter(|(k0, k1)| {
-            let ct = ct1;
-            ct.add_subkey(*k0)
+            let mut ct = ct1;
+            ct = ct.add_subkey(*k0)
                 .sub_bytes(sbox)
                 .add_subkey(*k1)
                 .sub_bytes(sbox);
@@ -192,7 +189,7 @@ fn attack(plaintexts: &[Block], ciphertexts: &[Block], sbox: Sbox) {
                 let recovered_keys = check_slid_pair(pt1, pt2, ct1, ct2, sbox);
                 for (k0, k1) in recovered_keys {
                     if check_key_expensive(k0, k1, plaintexts, ciphertexts, sbox) {
-                        println!("{:?} {:?}", k0.to_byte(), k1.to_byte());
+                        println!("found potential key: {:?} {:?}", k0.to_byte(), k1.to_byte());
                     }
                 }
             }
@@ -201,7 +198,7 @@ fn attack(plaintexts: &[Block], ciphertexts: &[Block], sbox: Sbox) {
 }
 
 fn main() {
-    let mut rng: SipRng = Seeder::from("clubby789").into_rng();
+    let mut rng: SipRng = Seeder::from("wwm :D").into_rng();
 
     let mut key: Key = Key(KeyData::ZERO);
     key.random_key(&mut rng);
@@ -215,7 +212,7 @@ fn main() {
     let mut plaintexts: Vec<Block> = Vec::new();
     let mut ciphertexts: Vec<Block> = Vec::new();
 
-    for _ in 0..20 {
+    for _ in 0..30 {
         let plaintext: Block = Block::from_byte(rng.next_u32() as u8);
         let ciphertext = cip.encrypt_block(plaintext);
         plaintexts.push(plaintext);
