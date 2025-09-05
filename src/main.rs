@@ -16,7 +16,7 @@ type BlockData = BitArray<[u8; BLOCK_SIZE]>;
 type KeyData = BitArray<[u8; KEY_SIZE]>;
 type SubkeyData = BitArray<[u8; BLOCK_SIZE]>;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Block(BlockData);
 
 #[derive(Debug, Clone, Copy)]
@@ -45,8 +45,9 @@ impl Cipher {
     }
 
     fn encrypt_round(&mut self, block: Block, subkey: Subkey) -> Block {
-        let block = block.add_subkey(subkey);
-        block.sub_bytes(self.sbox)
+        let mut block = block.add_subkey(subkey);
+        block = block.sub_bytes(self.sbox);
+        block
     }
 }
 
@@ -114,7 +115,6 @@ impl Subkey {
     fn to_byte(&self) -> u8 { bits_to_byte(self.get_data().as_bitslice().iter().by_vals()) }
 
     fn get_data(&self) -> &SubkeyData { &self.0 }
-    fn get_data_mut(&mut self) -> &mut SubkeyData { &mut self.0 }
 }
 
 fn bits_to_byte<I: Iterator<Item = bool>>(bits: I) -> u8 {
@@ -148,7 +148,7 @@ fn recover_key_combinations(pt1: Block, pt2: Block, sbox: Sbox) -> Vec<(Subkey, 
 fn check_key_basic(pt: Block, ct: Block, k0: Subkey, k1: Subkey, sbox: Sbox) -> bool {
     let subkeys: Vec<Subkey> = vec![k0, k1];
     let mut cip = Cipher { sbox, subkeys };
-    cip.encrypt_block(pt).to_byte() == ct.to_byte()
+    cip.encrypt_block(pt) == ct
 }
 
 fn check_slid_pair(pt1: Block, pt2: Block, ct1: Block, ct2: Block, sbox: Sbox) -> Vec<(Subkey, Subkey)> {
@@ -171,7 +171,7 @@ fn check_key_expensive(k0: Subkey, k1: Subkey, plaintexts: &[Block], ciphertexts
     let subkeys: Vec<Subkey> = vec![k0, k1];
     let mut cip = Cipher { sbox, subkeys };
     for (&pt, &ct) in plaintexts.iter().zip(ciphertexts).take(10) { 
-        if cip.encrypt_block(pt).to_byte() != ct.to_byte() {
+        if cip.encrypt_block(pt) != ct {
             return false
         }
     };
@@ -182,6 +182,7 @@ fn attack(plaintexts: &[Block], ciphertexts: &[Block], sbox: Sbox) {
     for i in 0..plaintexts.len() {
         let pt1 = plaintexts[i];
         let ct1 = ciphertexts[i];
+        println!("testing index {}", i);
         for j in 0..plaintexts.len() {
             let pt2 = plaintexts[j];
             let ct2 = ciphertexts[j];
@@ -211,6 +212,7 @@ fn main() {
 
     let mut plaintexts: Vec<Block> = Vec::new();
     let mut ciphertexts: Vec<Block> = Vec::new();
+    println!("encrypting plaintexts");
 
     for _ in 0..30 {
         let plaintext: Block = Block::from_byte(rng.next_u32() as u8);
@@ -218,8 +220,9 @@ fn main() {
         plaintexts.push(plaintext);
         ciphertexts.push(ciphertext);
     }
+    println!("plaintexts: {:?}", plaintexts.iter().map(|block| block.to_byte()).collect::<Vec<u8>>());
+    println!("ciphertexts: {:?}", ciphertexts.iter().map(|block| block.to_byte()).collect::<Vec<u8>>());
 
+    println!("beginning slide attack");
     attack(&plaintexts, &ciphertexts, sbox);
-    println!("{:?}", plaintexts.iter().map(|block| block.to_byte()).collect::<Vec<u8>>());
-    println!("{:?}", ciphertexts.iter().map(|block| block.to_byte()).collect::<Vec<u8>>());
 }
